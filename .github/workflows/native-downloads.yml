@@ -54,9 +54,18 @@ jobs:
         run: |
           case "$SOURCE_IPA_URL" in https://*) ;; *) exit 1 ;; esac
           case "$EEVEE_DYLIB_URL" in https://*) ;; *) echo 'A current Eevee library is required'; exit 1 ;; esac
+          
           curl --proto '=https' --proto-redir '=https' --location --fail "$SOURCE_IPA_URL" --output "$RUNNER_TEMP/source.ipa"
           curl --proto '=https' --proto-redir '=https' --location --fail "$EEVEE_DYLIB_URL" --output "$RUNNER_TEMP/EeveeSpotify.dylib"
+
+          # Ad-hoc sign the downloaded EeveeSpotify library
+          codesign --force --sign - --timestamp=none "$RUNNER_TEMP/EeveeSpotify.dylib"
+
+          # Verify the signature before packaging
+          codesign --verify --strict "$RUNNER_TEMP/EeveeSpotify.dylib"
+
           mkdir -p outputs/ci-package
+
           python3 NativeDownloads/tools/build_eevee_9192.py "$RUNNER_TEMP/source.ipa" --eevee-dylib "$RUNNER_TEMP/EeveeSpotify.dylib" --output outputs/ci-package/Spotify-9.1.92-EeveeSpotify-Pixie-v1.3.ipa > outputs/ci-package/build-report.json
       - uses: actions/upload-artifact@v4
         with:
