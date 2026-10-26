@@ -50,13 +50,6 @@ jobs:
           path: theos
           submodules: recursive
 
-      - name: Install Orion
-        run: |
-          set -euo pipefail
-          git clone --depth 1 \
-            https://github.com/theos/orion.git \
-            "$THEOS/vendor/orion"
-
       - name: Check EeveeSwiftProtobuf dependency
         run: |
           set -euo pipefail
