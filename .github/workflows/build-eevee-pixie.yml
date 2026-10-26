@@ -1,0 +1,152 @@
+
+name: Build EeveeSpotify + Pixie v1.3
+
+on:
+  workflow_dispatch:
+    inputs:
+      ipa_url:
+        description: "Direct URL to Spotify 9.1.90 + EeveeSpotify 7.0.0 IPA"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  THEOS: ${{ github.workspace }}/theos
+  THEOS_PACKAGE_SCHEME: rootless
+  OUTPUT_IPA: NativeDownloads/outputs/new-build/Spotify-9.1.90-EeveeSpotify-Pixie-v1.3.ipa
+
+jobs:
+  build:
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout EeveeSpotify + Pixie
+        uses: actions/checkout@v4
+
+      - name: Set up Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Check iOS SDK
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          SDK=$(xcrun --sdk iphoneos --show-sdk-version)
+          echo "iOS SDK: $SDK"
+          test "${SDK%%.*}" -ge 26
+
+      - name: Install build tools
+        run: |
+          brew install make dpkg ldid
+
+      - name: Install Theos
+        uses: actions/checkout@v4
+        with:
+          repository: theos/theos
+          path: theos
+          submodules: recursive
+
+      - name: Install Orion
+        run: |
+          set -euo pipefail
+          git clone --depth 1 \
+            https://github.com/theos/orion.git \
+            "$THEOS/vendor/orion"
+
+      - name: Check EeveeSwiftProtobuf dependency
+        run: |
+          set -euo pipefail
+          echo "Checking EeveeSwiftProtobuf..."
+          find . "$THEOS" -iname '*EeveeSwiftProtobuf*' \
+            -print | head -30
+
+      - name: Download EeveeSpotify IPA
+        env:
+          IPA_URL: ${{ inputs.ipa_url }}
+        run: |
+          set -euo pipefail
+          mkdir -p ipa
+          curl -fL --retry 3 "$IPA_URL" \
+            -o ipa/eevee.ipa
+          unzip -tq ipa/eevee.ipa
+
+      - name: Verify Spotify version
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import plistlib
+          import zipfile
+
+          with zipfile.ZipFile("ipa/eevee.ipa") as z:
+              paths = [
+                  p for p in z.namelist()
+                  if p.startswith("Payload/")
+                  and p.endswith(".app/Info.plist")
+                  and p.count("/") == 2
+              ]
+
+              if len(paths) != 1:
+                  raise SystemExit("Expected one main app")
+
+              info = plistlib.loads(z.read(paths[0]))
+              version = info.get("CFBundleShortVersionString")
+              print("Spotify version:", version)
+
+              if version != "9.1.90":
+                  raise SystemExit("Expected Spotify 9.1.90")
+
+              app = paths[0].removesuffix("Info.plist")
+              if app + "Frameworks/EeveeSpotify.dylib" not in z.namelist():
+                  raise SystemExit("EeveeSpotify.dylib not found")
+
+          print("Input IPA structure verified.")
+          PY
+
+      - name: Validate EeveeSpotify 9.1.90 source
+        run: |
+          set -euo pipefail
+          python3 NativeDownloads/tools/validate_eevee_9190.py
+
+      - name: Compile EeveeSpotify + Pixie
+        run: |
+          set -euo pipefail
+          THEOS_PACKAGE_SCHEME=rootless \
+            gmake -j4 all FINALPACKAGE=1
+
+      - name: Prepare patched Eevee dylib
+        run: |
+          set -euo pipefail
+          cp .theos/obj/EeveeSpotify.dylib \
+            /tmp/EeveeSpotify-Pixie.dylib
+
+          codesign --force --sign - --timestamp=none \
+            /tmp/EeveeSpotify-Pixie.dylib
+
+      - name: Build Pixie v1.3 IPA
+        run: |
+          set -euo pipefail
+          mkdir -p NativeDownloads/outputs/new-build
+
+          python3 NativeDownloads/tools/build_eevee_9190.py \
+            ipa/eevee.ipa \
+            --eevee-dylib /tmp/EeveeSpotify-Pixie.dylib \
+            --output "$OUTPUT_IPA"
+
+      - name: Validate finished IPA
+        run: |
+          set -euo pipefail
+          test -s "$OUTPUT_IPA"
+          unzip -tq "$OUTPUT_IPA"
+          echo "EeveeSpotify + Pixie IPA validated."
+
+      - name: Upload finished IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Spotify-9.1.90-EeveeSpotify-Pixie-v1.3
+          path: NativeDownloads/outputs/new-build/Spotify-9.1.90-EeveeSpotify-Pixie-v1.3.ipa
+          if-no-files-found: error
+          retention-days: 7
